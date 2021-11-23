@@ -80,6 +80,22 @@ static struct digest_type_t digest_types[] =
 #endif
     },
 
+    {{"sha512_224"}, 0,
+#ifdef HAVE_SHA512_224
+     {&EVP_sha512_224}
+#else
+     {NULL}
+#endif
+    },
+
+    {{"sha512_256"}, 0,
+#ifdef HAVE_SHA512_256
+     {&EVP_sha512_256}
+#else
+     {NULL}
+#endif
+    },
+
     {{"sha3_224"}, 0,
 #ifdef HAVE_SHA3_224
      {&EVP_sha3_224}
