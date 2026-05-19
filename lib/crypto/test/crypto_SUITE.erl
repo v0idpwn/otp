@@ -1581,17 +1581,26 @@ info(_Config) ->
             ok;
 
         %% Version strings in header vs lib seen to differ slightly on SUSE
-        %% but OpenSSL version numbers should be the same
+        %% but OpenSSL version numbers should be the same.
+        %% AWS-LC reports OPENSSL_VERSION_TEXT as
+        %% "OpenSSL 1.1.1 (compatible; AWS-LC X.Y.Z)" but
+        %% OpenSSL_version(OPENSSL_VERSION) as "AWS-LC X.Y.Z" — the AWS-LC
+        %% version number must match across compile/link.
         #{cryptolib_version_compiled := CompVer,
           cryptolib_version_linked := LibVer,
           compile_type := Tc,
           link_type := Tl} when is_atom(Tc), is_atom(Tl) ->
-            RE = "OpenSSL (\\d+\\.\\d+\\.\\d+.)",
+            AwsRE = "AWS-LC (\\d+\\.\\d+\\.\\d+)",
+            OsslRE = "OpenSSL (\\d+\\.\\d+\\.\\d+.)",
             Opts = [{capture,first,list}],
-            {match,[CompV]} = re:run(CompVer, RE, Opts),
-            {match,[LinkV]} = re:run(LibVer, RE, Opts),
-            {CompV,CompV} = {CompV,LinkV},
-            ok;
+            case {re:run(CompVer, AwsRE, Opts), re:run(LibVer, AwsRE, Opts)} of
+                {{match,[V]}, {match,[V]}} -> ok;
+                _ ->
+                    {match,[CompV]} = re:run(CompVer, OsslRE, Opts),
+                    {match,[LinkV]} = re:run(LibVer, OsslRE, Opts),
+                    {CompV,CompV} = {CompV,LinkV},
+                    ok
+            end;
 
         Other ->
             ct:log("LibVer = ~p~ncrypto:info() -> ~p", [LibVer,Other]),
