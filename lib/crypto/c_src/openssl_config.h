@@ -424,6 +424,13 @@
 # define HAVE_UPDATE_EMPTY_DATA_BUG
 #endif
 
+#ifdef HAS_AWSLC
+/* AWS-LC's bf_ecb EVP_CIPHER struct reports iv_len = BF_BLOCK (8) instead of
+ * 0, mirroring the ancient OpenSSL <= 0.9.8l ECB-IV-length bug. Reuse the
+ * existing GET_IV_LEN compatibility shim so ECB ciphers report a zero IV. */
+# define HAVE_ECB_IVEC_BUG
+#endif
+
 #if !defined(HAS_LIBRESSL) && !defined(HAS_AWSLC)
 # ifdef RSA_SSLV23_PADDING
 #  define HAVE_RSA_SSLV23_PADDING
