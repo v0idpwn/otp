@@ -520,6 +520,12 @@ struct mac_context
     EVP_MAC_CTX *ctx;
 #else
     EVP_MD_CTX *ctx;
+# if defined(HAVE_CMAC) && !defined(HAVE_EVP_PKEY_new_CMAC_key)
+    /* Streaming CMAC via the low-level CMAC_CTX API for builds with
+     * HAVE_CMAC but no EVP_PKEY-CMAC bridge (AWS-LC; OpenSSL < 1.1.1;
+     * LibreSSL < 3.3.3). Exactly one of ctx/cmac_ctx is non-NULL. */
+    CMAC_CTX *cmac_ctx;
+# endif
 #endif
 };
 
@@ -556,6 +562,10 @@ static void mac_context_dtor(ErlNifEnv* env, struct mac_context *obj)
         EVP_MD_CTX_free(obj->ctx);
 #endif
     }
+#if !defined(HAS_3_0_API) && defined(HAVE_CMAC) && !defined(HAVE_EVP_PKEY_new_CMAC_key)
+    if (obj->cmac_ctx)
+        CMAC_CTX_free(obj->cmac_ctx);
+#endif
 }
 
 /*******************************************************************
@@ -666,7 +676,7 @@ ERL_NIF_TERM mac_init_nif(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[])
         /********
          * CMAC *
          ********/
-# if defined(HAVE_CMAC) && defined(HAVE_EVP_PKEY_new_CMAC_key)
+# if defined(HAVE_CMAC)
     case CMAC_mac:
         {
             const struct cipher_type_t *cipherp;
@@ -679,7 +689,7 @@ ERL_NIF_TERM mac_init_nif(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[])
                         return_term = EXCP_BADARG_N(env, 2, "Bad key size");
                     goto err;
                 }
-            
+
             if (CIPHER_FORBIDDEN_IN_FIPS(cipherp))
                 {
                     return_term = EXCP_NOTSUP_N(env, 1, "Cipher algorithm not supported in FIPS");
@@ -694,13 +704,28 @@ ERL_NIF_TERM mac_init_nif(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[])
 
 #  if defined(HAS_3_0_API)
             cipher = cipherp->str_v3;
-#  else
+#  elif defined(HAVE_EVP_PKEY_new_CMAC_key)
             /* Old style */
             pkey = EVP_PKEY_new_CMAC_key(/*engine*/ NULL, key_bin.data,  key_bin.size, cipherp->cipher.p);
+#  else
+            /* Low-level CMAC streaming (AWS-LC; OpenSSL < 1.1.1; LibreSSL < 3.3.3).
+             * mac_one_time uses cmac_low_level for these builds; here we build
+             * the CMAC_CTX directly. Common allocation block below is skipped
+             * via cmac_done. */
+            if ((obj = enif_alloc_resource(mac_context_rtype, sizeof(struct mac_context))) == NULL)
+                assign_goto(return_term, err, EXCP_ERROR(env, "Can't allocate mac_context_rtype"));
+            obj->ctx = NULL;
+            obj->cmac_ctx = CMAC_CTX_new();
+            if (!obj->cmac_ctx)
+                assign_goto(return_term, err, EXCP_ERROR(env, "CMAC_CTX_new"));
+            if (!CMAC_Init(obj->cmac_ctx, key_bin.data, key_bin.size, cipherp->cipher.p, NULL))
+                assign_goto(return_term, err, EXCP_ERROR(env, "CMAC_Init"));
+            return_term = enif_make_resource(env, obj);
+            goto cmac_done;
 #  endif
         }
         break;
-# endif /* HAVE_CMAC && HAVE_EVP_PKEY_new_CMAC_key */
+# endif /* HAVE_CMAC */
 
 
         /************
@@ -768,6 +793,10 @@ ERL_NIF_TERM mac_init_nif(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[])
             return_term = EXCP_ERROR(env, "Can't allocate mac_context_rtype");
             goto err;
         }
+    obj->ctx = NULL;
+#  if defined(HAVE_CMAC) && !defined(HAVE_EVP_PKEY_new_CMAC_key)
+    obj->cmac_ctx = NULL;
+#  endif
 
     if ((obj->ctx = EVP_MD_CTX_new()) == NULL)
         {
@@ -784,6 +813,10 @@ ERL_NIF_TERM mac_init_nif(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[])
 # endif
 
     return_term = enif_make_resource(env, obj);
+
+#if !defined(HAS_3_0_API) && defined(HAVE_CMAC) && !defined(HAVE_EVP_PKEY_new_CMAC_key)
+ cmac_done:
+#endif
 
  err:
 
@@ -837,10 +870,17 @@ ERL_NIF_TERM mac_update(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[])
 
 # if defined(HAS_3_0_API)
     if (!EVP_MAC_update(obj->ctx, text.data, text.size))
-# else
-    if (EVP_DigestSignUpdate(obj->ctx, text.data, text.size) != 1)
-# endif
         return EXCP_ERROR(env, "mac update");
+# else
+#  if defined(HAVE_CMAC) && !defined(HAVE_EVP_PKEY_new_CMAC_key)
+    if (obj->cmac_ctx) {
+        if (!CMAC_Update(obj->cmac_ctx, text.data, text.size))
+            return EXCP_ERROR(env, "mac update");
+    } else
+#  endif
+    if (EVP_DigestSignUpdate(obj->ctx, text.data, text.size) != 1)
+        return EXCP_ERROR(env, "mac update");
+# endif
 
     CONSUME_REDS(env, text);
     return argv[0];
@@ -862,16 +902,31 @@ ERL_NIF_TERM mac_final_nif(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[])
     if (!enif_get_resource(env, argv[0], (ErlNifResourceType*)mac_context_rtype, (void**)&obj))
         return EXCP_BADARG_N(env, 0, "Bad ref");
 
+#  if defined(HAVE_CMAC) && !defined(HAVE_EVP_PKEY_new_CMAC_key) && !defined(HAS_3_0_API)
+    if (obj->cmac_ctx) {
+        const EVP_CIPHER_CTX *cctx = CMAC_CTX_get0_cipher_ctx(obj->cmac_ctx);
+        size = (cctx != NULL) ? (size_t)EVP_CIPHER_CTX_block_size(cctx) : 16;
+    } else
+#  endif
 # if defined(HAS_3_0_API)
     if (!EVP_MAC_final(obj->ctx, NULL, &size, 0))
+        return EXCP_ERROR(env, "Can't get sign size");
 # else
     if (EVP_DigestSignFinal(obj->ctx, NULL, &size) != 1)
-# endif
         return EXCP_ERROR(env, "Can't get sign size");
-   
+# endif
+
     if (!enif_alloc_binary(size, &ret_bin))
         return EXCP_ERROR(env, "Alloc binary");
 
+#  if defined(HAVE_CMAC) && !defined(HAVE_EVP_PKEY_new_CMAC_key) && !defined(HAS_3_0_API)
+    if (obj->cmac_ctx) {
+        if (!CMAC_Final(obj->cmac_ctx, ret_bin.data, &ret_bin.size)) {
+            enif_release_binary(&ret_bin);
+            return EXCP_ERROR(env, "Signing");
+        }
+    } else
+#  endif
 # if defined(HAS_3_0_API)
     if (!EVP_MAC_final(obj->ctx, ret_bin.data, &size, size))
 # else
