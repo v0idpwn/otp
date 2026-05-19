@@ -668,8 +668,16 @@ static EC_KEY* ec_key_new(ErlNifEnv* env, ERL_NIF_TERM curve_arg, size_t *size)
         goto err;
 
     if (enif_inspect_binary(env, prime[2], &seed)) {
+#ifdef HAS_AWSLC
+        /* AWS-LC's EC_GROUP_set_seed is a stub that always returns 0
+         * (see aws-lc crypto/fipsmodule/ec/ec.c). The seed is curve
+         * provenance metadata, not crypto material, so ignore the
+         * return value here. */
+        (void) EC_GROUP_set_seed(group, seed.data, seed.size);
+#else
         if (!EC_GROUP_set_seed(group, seed.data, seed.size))
             goto err;
+#endif
     }
 
     if (!term2point(env, curve[2], group, &point))
