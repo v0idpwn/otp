@@ -53,7 +53,8 @@
 #include <openssl/hmac.h>
 #include <openssl/err.h>
 
-#if OPENSSL_VERSION_NUMBER >= PACKED_OPENSSL_VERSION_PLAIN(3,0,0)
+#if OPENSSL_VERSION_NUMBER >= PACKED_OPENSSL_VERSION_PLAIN(3,0,0) \
+    && !defined(HAS_LIBRESSL)
 # define HAS_3_0_API
 # include <openssl/provider.h>
 #endif
@@ -84,6 +85,28 @@
 /* LibreSSL wants the 1.0.1 API */
 # define NEED_EVP_COMPATIBILITY_FUNCTIONS
 # endif
+#endif
+
+#ifdef HAS_AWSLC
+/* AWS-LC's FIPS activation differs from the OpenSSL 3.0 provider model
+ * and is not currently exposed through crypto. */
+#  undef FIPS_SUPPORT
+/* AWS-LC exposes EVP_CIPHER_nid but not EVP_CIPHER_type. They return the
+ * same value for the ciphers in AWS-LC's catalogue. */
+#  define EVP_CIPHER_type(c) EVP_CIPHER_nid(c)
+/* AWS-LC does not expose OPENSSL_ECC_MAX_FIELD_BITS in its public headers.
+ * Internally it caps field size at EC_MAX_BYTES = 66 bytes (528 bits); see
+ * aws-lc crypto/fipsmodule/ec/internal.h. This define must be kept in sync
+ * if AWS-LC ever raises that internal cap. */
+#  ifndef OPENSSL_ECC_MAX_FIELD_BITS
+#    define OPENSSL_ECC_MAX_FIELD_BITS 528
+#  endif
+/* AWS-LC removed BN_FLG_CONSTTIME because every bignum operation is now
+ * constant-time by default. BN_set_flags is a deprecated no-op; we redirect
+ * the call to keep the source readable. */
+#  ifndef BN_FLG_CONSTTIME
+#    define BN_FLG_CONSTTIME 0
+#  endif
 #endif
 
 
@@ -119,7 +142,12 @@
 
 # if OPENSSL_VERSION_NUMBER >= PACKED_OPENSSL_VERSION_PLAIN(1,1,1)
 #   define HAVE_PKEY_new_raw_private_key
-#   define HAVE_EVP_PKEY_new_CMAC_key
+#   ifndef HAS_AWSLC
+/* AWS-LC removed EVP_PKEY_new_CMAC_key. CMAC is still available through the
+ * dedicated CMAC_* API in openssl/cmac.h but OTP's mac.c only wires up the
+ * legacy PKEY path on the non-3.0 branch. */
+#     define HAVE_EVP_PKEY_new_CMAC_key
+#   endif
 #   define HAVE_DigestSign_as_single_op
 # endif
 #endif
@@ -158,7 +186,8 @@
 #endif
 
 
-#if OPENSSL_VERSION_NUMBER >= PACKED_OPENSSL_VERSION_PLAIN(1,0,0)
+#if OPENSSL_VERSION_NUMBER >= PACKED_OPENSSL_VERSION_PLAIN(1,0,0) \
+    && !defined(HAS_AWSLC)
 #include <openssl/modes.h>
 #endif
 
@@ -183,12 +212,14 @@
 # define HAVE_SHA512
 #endif
 #if OPENSSL_VERSION_NUMBER >= PACKED_OPENSSL_VERSION_PLAIN(1,1,1)	\
+    && !defined(HAS_AWSLC) \
     && !defined(OPENSSL_NO_SM3) && defined(NID_sm3)
 # define HAVE_SM3
 #endif
 
 // SM4
 #if OPENSSL_VERSION_NUMBER >= PACKED_OPENSSL_VERSION_PLAIN(1,1,1)	\
+    && !defined(HAS_AWSLC) \
     && !defined(OPENSSL_NO_SM4)
 # define HAVE_SM4
 #endif
@@ -236,6 +267,7 @@
 // BLAKE2:
 #if OPENSSL_VERSION_NUMBER >= PACKED_OPENSSL_VERSION_PLAIN(1,1,1) \
     && !defined(HAS_LIBRESSL) \
+    && !defined(HAS_AWSLC) \
     && !defined(OPENSSL_NO_BLAKE2)
 # define HAVE_BLAKE2
 #endif
@@ -247,7 +279,12 @@
 #ifndef OPENSSL_NO_DES
 # define HAVE_DES
 
-# if OPENSSL_VERSION_NUMBER >= PACKED_OPENSSL_VERSION(0,9,7,'e')
+# ifndef HAS_AWSLC
+/* AWS-LC dropped the CFB8 mode for DES */
+#  define HAVE_DES_cfb
+# endif
+
+# if OPENSSL_VERSION_NUMBER >= PACKED_OPENSSL_VERSION(0,9,7,'e') && !defined(HAS_AWSLC)
 #  define HAVE_DES_ede3_cfb
 # endif
 
@@ -298,6 +335,7 @@
 // (test for >= 1.1.1pre8)
 #if OPENSSL_VERSION_NUMBER >= (PACKED_OPENSSL_VERSION_PLAIN(1,1,1) -7) \
     && !defined(HAS_LIBRESSL) \
+    && !defined(HAS_AWSLC) \
     && defined(HAVE_EC)
 # ifdef HAVE_DH
 #   define HAVE_X25519
@@ -309,11 +347,22 @@
 # endif
 #endif
 
+#if defined(HAS_AWSLC) && defined(HAVE_EC)
+/* AWS-LC supports X25519/Ed25519 but not X448/Ed448 */
+# ifdef HAVE_DH
+#   define HAVE_X25519
+# endif
+# define HAVE_ED25519
+#endif
+
 #if OPENSSL_VERSION_NUMBER >= PACKED_OPENSSL_VERSION_PLAIN(1,0,1)
 # define HAVE_EVP_AES_CTR
 # define HAVE_AEAD
 # define HAVE_GCM
-# define HAVE_CCM
+# ifndef HAS_AWSLC
+/* AWS-LC removed the legacy EVP_CTRL_CCM_* ioctls used by the !HAS_3_0_API path */
+#  define HAVE_CCM
+# endif
 # ifndef OPENSSL_NO_CMAC
 #   define HAVE_CMAC
 # endif
@@ -336,7 +385,8 @@
 #endif
 
 #if OPENSSL_VERSION_NUMBER >= PACKED_OPENSSL_VERSION(1,1,0,'d')
-# ifndef HAS_LIBRESSL
+# if !defined(HAS_LIBRESSL) && !defined(HAS_AWSLC)
+/* AWS-LC only exposes EVP_chacha20_poly1305, not the standalone EVP_chacha20 */
 #  ifndef OPENSSL_NO_CHACHA
 #    define HAVE_CHACHA20
 #  endif
@@ -345,7 +395,9 @@
 
 // OPENSSL_VERSION_NUMBER >= 1.1.1-pre8
 #if OPENSSL_VERSION_NUMBER >= (PACKED_OPENSSL_VERSION_PLAIN(1,1,1)-7)
-# ifndef HAS_LIBRESSL
+# if !defined(HAS_LIBRESSL) && !defined(HAS_AWSLC)
+/* AWS-LC implements Poly1305 but does not expose the EVP_PKEY_POLY1305
+ * legacy type used by mac.c. */
 #  if !defined(OPENSSL_NO_POLY1305)
 #    define HAVE_POLY1305
 #  endif
@@ -366,7 +418,7 @@
 # define HAVE_UPDATE_EMPTY_DATA_BUG
 #endif
 
-#ifndef HAS_LIBRESSL
+#if !defined(HAS_LIBRESSL) && !defined(HAS_AWSLC)
 # ifdef RSA_SSLV23_PADDING
 #  define HAVE_RSA_SSLV23_PADDING
 # endif
@@ -384,7 +436,7 @@
 /* If OPENSSL_NO_EC is set, there will be an error in ec.h included from engine.h
    So if EC is disabled, you can't use Engine either....
 */
-#if !defined(OPENSSL_NO_ENGINE) && !defined(__WIN32__)
+#if !defined(OPENSSL_NO_ENGINE) && !defined(__WIN32__) && !defined(HAS_AWSLC)
 # define HAS_ENGINE_SUPPORT
 #endif
 #endif

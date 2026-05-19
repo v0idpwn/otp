@@ -32,6 +32,17 @@
 # define HAS_LIBRESSL_VSN 0
 #endif
 
+#ifdef OPENSSL_IS_AWSLC
+# define HAS_AWSLC
+# ifdef AWSLC_API_VERSION
+#  define HAS_AWSLC_VSN AWSLC_API_VERSION
+# else
+#  define HAS_AWSLC_VSN 0
+# endif
+#else
+# define HAS_AWSLC_VSN 0
+#endif
+
 /* Helper macros to construct a OPENSSL_VERSION_NUMBER.
  * See openssl/opensslv.h
  */

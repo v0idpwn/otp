@@ -5722,7 +5722,7 @@ if test "$CFLAG_RUNTIME_LIBRARY_PATH" = ""; then
   CFLAG_RUNTIME_LIBRARY_PATH="-Wl,-R"
   case $host_os in
     darwin*)
-	CFLAG_RUNTIME_LIBRARY_PATH=
+	CFLAG_RUNTIME_LIBRARY_PATH="-Wl,-rpath,"
 	;;
     win32)
 	CFLAG_RUNTIME_LIBRARY_PATH=
@@ -7547,7 +7547,8 @@ rm -rf conftest*
 /* end confdefs.h.  */
 
 #include <openssl/opensslv.h>
-#if LIBRESSL_VERSION_NUMBER >= 0x3050000fL
+#if (defined(LIBRESSL_VERSION_NUMBER) && LIBRESSL_VERSION_NUMBER >= 0x3050000fL) \
+    || defined(OPENSSL_IS_AWSLC)
 yes
 #endif
 
@@ -8097,7 +8098,8 @@ rm -rf conftest*
 /* end confdefs.h.  */
 
 #include <openssl/opensslv.h>
-#if LIBRESSL_VERSION_NUMBER >= 0x3050000fL
+#if (defined(LIBRESSL_VERSION_NUMBER) && LIBRESSL_VERSION_NUMBER >= 0x3050000fL) \
+    || defined(OPENSSL_IS_AWSLC)
 yes
 #endif
 

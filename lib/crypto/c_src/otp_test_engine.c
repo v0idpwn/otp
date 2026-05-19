@@ -29,6 +29,7 @@
 #include <limits.h>
 #include <stdint.h>
 
+#include <openssl/opensslv.h>
 #include <openssl/md5.h>
 #include <openssl/rsa.h>
 
@@ -39,12 +40,14 @@
     PACKED_OPENSSL_VERSION(MAJ,MIN,FIX,('a'-1))
 
 #if OPENSSL_VERSION_NUMBER < PACKED_OPENSSL_VERSION_PLAIN(1,1,0) \
-    || (defined(LIBRESSL_VERSION_NUMBER) && LIBRESSL_VERSION_NUMBER < 0x3050000fL)
+    || (defined(LIBRESSL_VERSION_NUMBER) && LIBRESSL_VERSION_NUMBER < 0x3050000fL) \
+    || defined(OPENSSL_IS_AWSLC)
 # define OLD
 #endif
 
 #if OPENSSL_VERSION_NUMBER >= PACKED_OPENSSL_VERSION_PLAIN(1,1,0) \
-    && !defined(LIBRESSL_VERSION_NUMBER)
+    && !defined(LIBRESSL_VERSION_NUMBER) \
+    && !defined(OPENSSL_IS_AWSLC)
 # define FAKE_RSA_IMPL
 #endif
 

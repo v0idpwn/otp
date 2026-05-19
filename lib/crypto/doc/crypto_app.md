@@ -35,11 +35,19 @@ The current crypto implementation uses nifs to interface OpenSSLs crypto library
 and may work with limited functionality with as old versions as _OpenSSL_
 0\.9.8c. FIPS mode support requires at least version 1.0.1 and a FIPS capable
 OpenSSL installation. We recommend using a version that is officially supported
-by the OpenSSL project. API compatible backends like LibreSSL should also work.
+by the OpenSSL project. API compatible backends like LibreSSL and AWS-LC should
+also work.
+
+AWS-LC is supported and is recommended for users on AWS Graviton (ARM64) for
+improved throughput on AES-GCM, SHA-2, ChaCha20-Poly1305, and Curve25519.
+AWS-LC reports itself as OpenSSL 1.1.1 API-compatible. It does not provide the
+OpenSSL ENGINE API, BLAKE2, the SM3/SM4 algorithm family, or X448/Ed448;
+`crypto:supports/0` reflects these absences at runtime. FIPS mode with AWS-LC
+is not currently exposed through `crypto` and is left as follow-up work.
 
 The crypto app is tested daily with at least one version of each of the OpenSSL
 1.0.1, 1.0.2, 1.1.0, 1.1.1 and 3.0. FIPS mode is also tested for 1.0.1, 1.0.2
-and 3.0.
+and 3.0. AWS-LC is not yet part of the daily test matrix.
 
 Using OpenSSL 3.0 with Engines is supported since OTP 26.2.
 

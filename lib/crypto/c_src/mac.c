@@ -84,9 +84,12 @@ static struct mac_type_t mac_types[] =
     },
 
     {{"cmac"}, 0,
-#ifdef HAVE_CMAC
-     /* If we have CMAC then we have EVP_PKEY */
+#if defined(HAVE_CMAC) && (defined(HAS_3_0_API) || defined(HAVE_EVP_PKEY_new_CMAC_key))
+     /* Path A: 3.0 fetch-by-name. Path B: legacy EVP_PKEY_CMAC. */
      {EVP_PKEY_CMAC}, CMAC_mac, 0
+#elif defined(HAVE_CMAC)
+     /* Low-level CMAC_* API path (cmac.c). pkey_type field is unused. */
+     {0}, CMAC_mac, 0
 #else
      {EVP_PKEY_NONE}, NO_mac, 0
 #endif

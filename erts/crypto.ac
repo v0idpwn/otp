@@ -229,7 +229,8 @@ yes
 # Get default value for the --disable-otp-test-engine. Depends on cryptolib version
           AC_EGREP_CPP(^yes.?$,[
 #include <openssl/opensslv.h>
-#if LIBRESSL_VERSION_NUMBER >= 0x3050000fL
+#if (defined(LIBRESSL_VERSION_NUMBER) && LIBRESSL_VERSION_NUMBER >= 0x3050000fL) \
+    || defined(OPENSSL_IS_AWSLC)
 yes
 #endif
         		 ],
