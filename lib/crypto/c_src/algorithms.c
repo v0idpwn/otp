@@ -736,7 +736,9 @@ void init_rsa_opts_types(ErlNifEnv* env) {
     algo_rsa_opts[algo_rsa_opts_cnt++] = enif_make_atom(env,"signature_md");
 #endif
     algo_rsa_opts[algo_rsa_opts_cnt++] = enif_make_atom(env,"rsa_pkcs1_padding");
+#ifdef HAVE_RSA_X931_PADDING
     algo_rsa_opts[algo_rsa_opts_cnt++] = enif_make_atom(env,"rsa_x931_padding");
+#endif
 #ifdef HAVE_RSA_SSLV23_PADDING
     algo_rsa_opts[algo_rsa_opts_cnt++] = enif_make_atom(env,"rsa_sslv23_padding");
 #endif

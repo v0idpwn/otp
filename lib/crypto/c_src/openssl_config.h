@@ -369,6 +369,12 @@
 # if defined(RSA_PKCS1_OAEP_PADDING)
 #   define HAVE_RSA_OAEP_PADDING
 # endif
+# ifndef HAS_AWSLC
+/* AWS-LC defines RSA_X931_PADDING for compile-time compatibility but the
+ * padding is not implemented; see aws-lc include/openssl/rsa.h and
+ * crypto/fipsmodule/evp/p_rsa.c (rejects "x931" mode). */
+#  define HAVE_RSA_X931_PADDING
+# endif
 # define HAVE_RSA_MGF1_MD
 # if OPENSSL_VERSION_NUMBER < PACKED_OPENSSL_VERSION(1,0,1,'d')
 #  define HAVE_GCM_EVP_DECRYPT_BUG
