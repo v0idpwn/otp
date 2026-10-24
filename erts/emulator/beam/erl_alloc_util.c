@@ -6593,6 +6593,16 @@ restart:
             erts_mtx_unlock(&pref_allctr->mutex);
         }
     }
+    else if (!force_move
+             && size <= old_user_size
+             && UMEMSZ2BLKSZ(pref_allctr, size) == old_user_size + ABLK_HDR_SZ) {
+        /* Moving would copy the block without changing its size */
+        res = p;
+
+        if (pref_allctr->thread_safe) {
+            erts_mtx_unlock(&pref_allctr->mutex);
+        }
+    }
     else {
 	res = do_erts_alcu_alloc(type, pref_allctr, size);
 
