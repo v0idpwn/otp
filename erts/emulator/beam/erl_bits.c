@@ -2897,7 +2897,7 @@ erts_shrink_binary_term(Eterm binary, size_t size)
 
         /* Our allocators are 8-byte aligned, so don't bother reallocating for
          * differences smaller than that. */
-        if (size < (NBYTES(sb->end) + 8)) {
+        if ((br->val)->orig_size - size >= 8) {
             br->val = erts_bin_realloc(br->val, size);
             sb->base_flags = (UWord)&(br->val)->orig_bytes[0];
         }
