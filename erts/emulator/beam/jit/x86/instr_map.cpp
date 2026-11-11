@@ -711,9 +711,10 @@ void BeamGlobalAssembler::emit_update_map_single_exact_body_shared() {
  * RET = size
  *
  * Copies the flat map to HTOP, sharing its keys, without bumping HTOP.
- * Clobbers ARG1, ARG2, RET, TMP1, and xmm0. */
+ * Clobbers ARG1, ARG2, RET, TMP1, and xmm0. Preserves TMP2. */
 void BeamGlobalAssembler::emit_copy_flatmap_shared() {
-    Label pairs = a.new_label(), copy = a.new_label(), copied = a.new_label();
+    Label pairs = a.new_label(), quads = a.new_label(), copy = a.new_label(),
+          copied = a.new_label();
 
     /* Share the key tuple with the old map. */
     ERTS_CT_ASSERT(offsetof(flatmap_t, thing_word) == 0);
@@ -742,15 +743,115 @@ void BeamGlobalAssembler::emit_copy_flatmap_shared() {
     a.shr(RET, imm(1));
     a.short_().jz(copied);
 
+    /* Copy two pairs per iteration, as the loop is otherwise limited by
+     * its taken branch. */
+    a.shr(RET, imm(1));
+    a.short_().jnc(quads);
+    vmovups(x86::xmm0, x86::xmmword_ptr(ARG2));
+    a.lea(ARG2, x86::qword_ptr(ARG2, sizeof(Eterm[2])));
+    vmovups(x86::xmmword_ptr(ARG1), x86::xmm0);
+    a.lea(ARG1, x86::qword_ptr(ARG1, sizeof(Eterm[2])));
+
+    a.bind(quads);
+    a.test(RET, RET);
+    a.short_().jz(copied);
+
     a.bind(copy);
     vmovups(x86::xmm0, x86::xmmword_ptr(ARG2));
     vmovups(x86::xmmword_ptr(ARG1), x86::xmm0);
-    a.add(ARG2, imm(sizeof(Eterm[2])));
-    a.add(ARG1, imm(sizeof(Eterm[2])));
+    vmovups(x86::xmm0, x86::xmmword_ptr(ARG2, sizeof(Eterm[2])));
+    vmovups(x86::xmmword_ptr(ARG1, sizeof(Eterm[2])), x86::xmm0);
+    a.add(ARG2, imm(sizeof(Eterm[4])));
+    a.add(ARG1, imm(sizeof(Eterm[4])));
     a.dec(RET);
     a.short_().jnz(copy);
 
     a.bind(copied);
+    a.ret();
+}
+
+/* ARG4 = number of keys already passed
+ * ARG5 = pointer to the first key
+ * TMP1 = key (immediate)
+ * TMP2 = size
+ *
+ * Sets ZF and leaves the one-based index of the key in ARG4 if found, clears
+ * ZF otherwise. Clobbers RET, xmm0, xmm1, and xmm2. */
+void BeamGlobalAssembler::emit_find_flatmap_key_shared() {
+    Label tail = a.new_label(), miss = a.new_label();
+
+    if (hasCpuFeature(CpuFeatures::X86::kAVX)) {
+        Label body = a.new_label(), rest = a.new_label(),
+              hit = a.new_label(), first = a.new_label();
+
+        /* The next key is the most likely one when updating several keys
+         * or the first few of a map. */
+        a.cmp(ARG4, TMP2);
+        a.jae(miss);
+        a.cmp(x86::qword_ptr(ARG5, ARG4, 3), TMP1);
+        a.short_().je(first);
+
+        a.vmovq(x86::xmm1, TMP1);
+        a.vpunpcklqdq(x86::xmm1, x86::xmm1, x86::xmm1);
+
+        /* We must not over-read, as the keys may be a literal at the very
+         * end of a mapping. */
+        a.lea(RET, x86::qword_ptr(ARG4, 4));
+        a.cmp(RET, TMP2);
+        a.short_().ja(rest);
+
+        /* Compare four keys at a time, leaving four mask bits per key. */
+        a.bind(body);
+        a.vpcmpeqq(x86::xmm0, x86::xmm1, x86::xmmword_ptr(ARG5, ARG4, 3));
+        a.vpcmpeqq(x86::xmm2, x86::xmm1, x86::xmmword_ptr(ARG5, ARG4, 3, 16));
+        a.vpackssdw(x86::xmm0, x86::xmm0, x86::xmm2);
+        a.vpmovmskb(RETd, x86::xmm0);
+        a.add(ARG4, imm(4));
+        a.test(RETd, RETd);
+        a.short_().jnz(hit);
+        a.lea(RET, x86::qword_ptr(ARG4, 4));
+        a.cmp(RET, TMP2);
+        a.short_().jbe(body);
+
+        /* Fewer than four keys remain. When the map has at least four keys,
+         * compare its last four: none of the keys that we have already
+         * passed can match. */
+        a.bind(rest);
+        a.cmp(TMP2, imm(4));
+        a.short_().jb(tail);
+        a.cmp(ARG4, TMP2);
+        a.short_().jae(miss);
+        a.lea(ARG4, x86::qword_ptr(TMP2, -4));
+        a.vpcmpeqq(x86::xmm0, x86::xmm1, x86::xmmword_ptr(ARG5, ARG4, 3));
+        a.vpcmpeqq(x86::xmm2, x86::xmm1, x86::xmmword_ptr(ARG5, ARG4, 3, 16));
+        a.vpackssdw(x86::xmm0, x86::xmm0, x86::xmm2);
+        a.vpmovmskb(RETd, x86::xmm0);
+        a.mov(ARG4, TMP2);
+        a.test(RETd, RETd);
+        a.short_().jz(miss);
+
+        a.bind(hit);
+        a.bsf(RETd, RETd);
+        a.shr(RETd, imm(2));
+        a.lea(ARG4, x86::qword_ptr(ARG4, RET, 0, -3));
+        a.cmp(RET, RET);
+        a.ret();
+
+        a.bind(first);
+        a.lea(ARG4, x86::qword_ptr(ARG4, 1));
+        a.ret();
+    }
+
+    a.bind(tail);
+    a.cmp(ARG4, TMP2);
+    a.short_().jae(miss);
+    a.inc(ARG4);
+    a.cmp(x86::qword_ptr(ARG5, ARG4, 3, -(Sint)sizeof(Eterm)), TMP1);
+    a.short_().jne(tail);
+    a.ret();
+
+    a.bind(miss);
+    a.test(ARG5, ARG5);
     a.ret();
 }
 
@@ -825,23 +926,17 @@ void BeamModuleAssembler::emit_update_map_exact(
         }
 
         mov_imm(ARG4, 0);
+        a.mov(TMP2, x86::qword_ptr(ARG2, offsetof(flatmap_t, size)));
 
         /* Look for the first value that changes, returning the map as is if
          * there is none. */
         for (size_t i = 0; i < args.size(); i += 2) {
-            Label search = a.new_label();
-
             store.push_back(a.new_label());
             resume.push_back(a.new_label());
 
-            a.bind(search);
-            a.cmp(ARG4, x86::qword_ptr(ARG2, offsetof(flatmap_t, size)));
-            a.jae(generic);
-            a.inc(ARG4);
-            cmp_arg(x86::qword_ptr(ARG5, ARG4, 3, -(Sint)sizeof(Eterm)),
-                    args[i],
-                    TMP1);
-            a.short_().jne(search);
+            mov_arg(TMP1, args[i]);
+            fragment_call(ga->get_find_flatmap_key_shared());
+            a.jne(generic);
 
             mov_arg(RET, args[i + 1]);
             a.cmp(RET,
@@ -888,16 +983,9 @@ void BeamModuleAssembler::emit_update_map_exact(
         /* Store the remaining values in the new map. */
         for (size_t i = 0; i < args.size(); i += 2) {
             if (i > 0) {
-                Label search = a.new_label();
-
-                a.bind(search);
-                a.cmp(ARG4, x86::qword_ptr(HTOP, offsetof(flatmap_t, size)));
-                a.jae(generic);
-                a.inc(ARG4);
-                cmp_arg(x86::qword_ptr(ARG5, ARG4, 3, -(Sint)sizeof(Eterm)),
-                        args[i],
-                        TMP1);
-                a.short_().jne(search);
+                mov_arg(TMP1, args[i]);
+                fragment_call(ga->get_find_flatmap_key_shared());
+                a.jne(generic);
             }
 
             a.bind(store[i / 2]);

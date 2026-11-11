@@ -45,6 +45,7 @@ my @beam_global_funcs = qw(
     check_float_error
     construct_utf8_shared
     copy_flatmap_shared
+    find_flatmap_key_shared
     create_native_record_shared
     dispatch_bif
     dispatch_nif
